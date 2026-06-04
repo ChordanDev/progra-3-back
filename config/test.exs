@@ -6,10 +6,12 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :my_food_back, MyFoodBack.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
-  database: "my_food_back_test#{System.get_env("MIX_TEST_PARTITION")}",
+  username: System.get_env("POSTGRES_USER") || System.get_env("USER"),
+  password: System.get_env("POSTGRES_PASSWORD") || "",
+  hostname: System.get_env("POSTGRES_HOST") || "localhost",
+  database:
+    System.get_env("POSTGRES_TEST_DB") ||
+      "my_food_back_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
@@ -31,10 +33,6 @@ config :logger, level: :warning
 
 # Initialize plugs at runtime for faster test compilation
 config :phoenix, :plug_init_mode, :runtime
-
-# Enable helpful, but potentially expensive runtime checks
-config :phoenix_live_view,
-  enable_expensive_runtime_checks: true
 
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,

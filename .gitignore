@@ -37,3 +37,6 @@ npm-debug.log
 
 # Local Pi runtime state
 .atl/
+
+# ElixirLS local build artifacts
+.elixir_ls/
