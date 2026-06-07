@@ -42,6 +42,25 @@ defmodule MyFoodBack.AccountsTest do
       assert %{email: ["has already been taken"]} = errors_on(changeset)
       assert Repo.aggregate(User, :count) == 1
     end
+
+    test "database uniqueness also rejects mixed-case email bypassing changeset normalization" do
+      assert {:ok, _user} =
+               %User{email: "mixed@example.com"}
+               |> Repo.insert()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert_raise Postgrex.Error, fn ->
+        Repo.insert_all(User, [
+          %{
+            id: Ecto.UUID.generate(),
+            email: "MIXED@example.com",
+            inserted_at: now,
+            updated_at: now
+          }
+        ])
+      end
+    end
   end
 
   describe "current account loading" do
@@ -55,6 +74,43 @@ defmodule MyFoodBack.AccountsTest do
       assert loaded.account.id == account.id
       assert loaded.membership.id == membership.id
       assert loaded.membership.role == "owner"
+    end
+
+    test "loads the newest active individual membership deterministically" do
+      assert {:ok, %{user: user}} =
+               Accounts.create_individual_account(%{email: "multi@example.com"},
+                 now: ~U[2026-06-07 12:00:00Z]
+               )
+
+      newest_account =
+        %Account{}
+        |> Account.changeset(%{
+          type: "individual",
+          trial_started_at: ~U[2026-06-08 12:00:00Z],
+          trial_ends_at: ~U[2026-06-18 12:00:00Z],
+          subscription_status: "none"
+        })
+        |> Repo.insert!()
+
+      newest_membership =
+        %Membership{user_id: user.id, account_id: newest_account.id}
+        |> Membership.changeset(%{role: "owner", status: "active"})
+        |> Repo.insert!()
+
+      import Ecto.Query
+
+      Repo.update_all(
+        from(membership in Membership, where: membership.id != ^newest_membership.id),
+        set: [inserted_at: ~U[2026-06-07 12:00:00Z]]
+      )
+
+      Repo.update_all(
+        from(membership in Membership, where: membership.id == ^newest_membership.id),
+        set: [inserted_at: ~U[2026-06-08 12:00:00Z]]
+      )
+
+      assert {:ok, loaded} = Accounts.get_current_account(user)
+      assert loaded.membership.id == newest_membership.id
     end
   end
 
