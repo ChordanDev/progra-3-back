@@ -45,6 +45,7 @@ defmodule MyFoodBack.Accounts do
         join: account in assoc(membership, :account),
         where: account.type == "individual",
         preload: [account: account],
+        order_by: [desc: membership.inserted_at, desc: membership.id],
         limit: 1
       )
 
