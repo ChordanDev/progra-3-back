@@ -16,6 +16,12 @@ defmodule MyFoodBack.Accounts do
   def normalize_email(other), do: other
 
   def create_individual_account(attrs, opts \\ []) do
+    attrs
+    |> create_individual_account_multi(opts)
+    |> Repo.transaction()
+  end
+
+  def create_individual_account_multi(attrs, opts \\ []) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     trial_ends_at = DateTime.add(now, @trial_days, :day)
 
@@ -33,7 +39,6 @@ defmodule MyFoodBack.Accounts do
       %Membership{user_id: user.id, account_id: account.id}
       |> Membership.changeset(%{role: "owner", status: "active"})
     end)
-    |> Repo.transaction()
   end
 
   def get_current_account(%User{id: user_id}), do: get_current_account(user_id)
