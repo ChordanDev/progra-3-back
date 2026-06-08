@@ -45,6 +45,13 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
       end)
     end
 
+    test "rejects missing or invalid signup email with a stable error" do
+      assert {:error, %{code: "invalid_email"}} = Auth.request_signup_code(%{}, now: @now)
+
+      assert {:error, %{code: "invalid_email"}} =
+               Auth.request_signup_code(%{email: "not-an-email"}, now: @now)
+    end
+
     test "rejects duplicate signup email" do
       assert {:ok, _graph} =
                Accounts.create_individual_account(%{email: "user@example.com"}, now: @now)
@@ -79,6 +86,13 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
   end
 
   describe "login code requests" do
+    test "rejects missing or invalid login email with a stable error" do
+      assert {:error, %{code: "invalid_email"}} = Auth.request_login_code(%{}, now: @now)
+
+      assert {:error, %{code: "invalid_email"}} =
+               Auth.request_login_code(%{email: "not-an-email"}, now: @now)
+    end
+
     test "requires an existing user" do
       assert {:error, %{code: "email_not_found"}} =
                Auth.request_login_code(%{email: "missing@example.com"}, now: @now)
@@ -106,13 +120,21 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
   end
 
   describe "code verification primitives" do
-    test "valid code consumes the latest active code" do
+    test "valid code consumes the latest active code and returns session material" do
       assert {:ok, _response} =
                Auth.request_signup_code(%{email: "verify@example.com"}, now: @now)
 
       code = delivered_code()
 
-      assert {:ok, %EmailCode{consumed_at: @now}} =
+      assert {:ok, auth} =
+               Auth.verify_signup_code(%{email: "verify@example.com", code: code}, now: @now)
+
+      assert auth.token_type == "Bearer"
+      assert is_binary(auth.access_token)
+      assert is_binary(auth.refresh_token)
+      assert Repo.one!(EmailCode).consumed_at == @now
+
+      assert {:error, %{code: "code_invalid"}} =
                Auth.verify_signup_code(%{email: "verify@example.com", code: code}, now: @now)
     end
 
@@ -173,9 +195,8 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
   end
 
   defp delivered_code do
-    assert_email_sent(fn email ->
-      [code] = Regex.run(~r/\b\d{6}\b/, email.text_body)
-      code
-    end)
+    assert_received {:email, email}
+    [code] = Regex.run(~r/\b\d{6}\b/, email.text_body)
+    code
   end
 end

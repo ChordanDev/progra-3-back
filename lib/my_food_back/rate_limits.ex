@@ -52,17 +52,26 @@ defmodule MyFoodBack.RateLimits do
     ip = Keyword.get(opts, :ip)
     device_id = Keyword.get(opts, :device_id)
 
-    Repo.insert!(event_changeset(:email, request_key("email", flow, email), "request_code", now))
+    events =
+      [
+        event_changeset(:email, request_key("email", flow, email), "request_code", now),
+        optional_event_changeset(:ip, ip, "request_code", now),
+        optional_event_changeset(:device, device_id, "request_code", now)
+      ]
+      |> Enum.reject(&is_nil/1)
 
-    if present?(ip) do
-      Repo.insert!(event_changeset(:ip, ip, "request_code", now))
+    Repo.transaction(fn ->
+      Enum.each(events, fn changeset ->
+        case Repo.insert(changeset) do
+          {:ok, _event} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+    end)
+    |> case do
+      {:ok, _events} -> :ok
+      {:error, reason} -> {:error, reason}
     end
-
-    if present?(device_id) do
-      Repo.insert!(event_changeset(:device, device_id, "request_code", now))
-    end
-
-    :ok
   end
 
   def hash_value(nil), do: nil
@@ -99,12 +108,20 @@ defmodule MyFoodBack.RateLimits do
     })
   end
 
+  defp optional_event_changeset(_scope, value, _action, _now) when value in [nil, ""], do: nil
+
+  defp optional_event_changeset(scope, value, action, now),
+    do: event_changeset(scope, value, action, now)
+
   defp request_key(prefix, flow, email), do: "#{prefix}:#{flow}:#{email}"
 
-  defp present?(value), do: is_binary(value) and value != ""
-
   defp hash(value) do
-    :crypto.hash(:sha256, value)
+    :crypto.mac(:hmac, :sha256, secret(), value)
     |> Base.encode16(case: :lower)
+  end
+
+  defp secret do
+    endpoint_config = Application.get_env(:my_food_back, MyFoodBackWeb.Endpoint, [])
+    Keyword.fetch!(endpoint_config, :secret_key_base)
   end
 end
