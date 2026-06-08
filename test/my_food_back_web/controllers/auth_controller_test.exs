@@ -152,10 +152,24 @@ defmodule MyFoodBackWeb.AuthControllerTest do
       assert {:ok, _token} = Auth.refresh_session(second.refresh_token, now: @now)
     end
 
-    test "logout rejects missing or non-string refresh token without crashing", %{conn: conn} do
-      auth = signup_via_context("missing-token@example.com")
+    test "logout without refresh token revokes the authenticated session", %{conn: conn} do
+      auth = signup_via_context("current-logout@example.com")
 
-      for params <- [%{}, %{refreshToken: nil}, %{refreshToken: 123}] do
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> post(~p"/api/auth/logout", %{})
+
+      assert response(conn, 204) == ""
+
+      assert {:error, %{code: "refresh_token_revoked"}} =
+               Auth.refresh_session(auth.refresh_token, now: now())
+    end
+
+    test "logout rejects non-string refresh token without crashing", %{conn: conn} do
+      auth = signup_via_context("bad-token@example.com")
+
+      for params <- [%{refreshToken: 123}] do
         conn =
           conn
           |> recycle()
