@@ -91,6 +91,19 @@ defmodule MyFoodBack.Auth do
 
   def logout(_refresh_token, _opts), do: error(:refresh_token_invalid)
 
+  def logout_current_session(refresh_token, current_session, opts \\ [])
+
+  def logout_current_session(refresh_token, %Session{} = current_session, opts) do
+    if Tokens.hash_refresh_token(refresh_token) == current_session.refresh_token_hash do
+      logout(refresh_token, opts)
+    else
+      error(:refresh_token_session_mismatch)
+    end
+  end
+
+  def logout_current_session(_refresh_token, _current_session, _opts),
+    do: error(:refresh_token_invalid)
+
   def verify_access_token(access_token, opts \\ []) do
     now = now(opts)
 
@@ -102,6 +115,18 @@ defmodule MyFoodBack.Auth do
       {:error, :access_token_expired} -> error(:access_token_expired)
       false -> error(:access_token_expired)
       _ -> error(:unauthenticated)
+    end
+  end
+
+  def current_user_snapshot(%Session{user_id: user_id}, opts \\ []) do
+    now = now(opts)
+
+    with %User{} = user <- Repo.get(User, user_id),
+         {:ok, %{account: account, membership: membership}} <- Accounts.get_current_account(user) do
+      {:ok, current_snapshot(user, account, membership, now)}
+    else
+      nil -> error(:unauthenticated)
+      {:error, :not_found} -> error(:account_not_found)
     end
   end
 
