@@ -79,17 +79,41 @@ defmodule MyFoodBack.Auth do
         :ok
 
       %Session{} = session ->
-        session
-        |> Session.changeset(%{revoked_at: now, revoked_reason: "logout"})
-        |> Repo.update()
-        |> case do
-          {:ok, _session} -> :ok
-          {:error, changeset} -> {:error, changeset}
-        end
+        revoke_session(session, now, "logout")
     end
   end
 
   def logout(_refresh_token, _opts), do: error(:refresh_token_invalid)
+
+  def logout_current_session(refresh_token, current_session, opts \\ [])
+
+  def logout_current_session(nil, %Session{} = current_session, opts) do
+    revoke_session(current_session, now(opts), "logout")
+  end
+
+  def logout_current_session(refresh_token, %Session{} = current_session, opts)
+      when is_binary(refresh_token) do
+    if Tokens.hash_refresh_token(refresh_token) == current_session.refresh_token_hash do
+      logout(refresh_token, opts)
+    else
+      error(:refresh_token_session_mismatch)
+    end
+  end
+
+  def logout_current_session(_refresh_token, %Session{}, _opts), do: error(:refresh_token_invalid)
+
+  def logout_current_session(_refresh_token, _current_session, _opts),
+    do: error(:refresh_token_invalid)
+
+  defp revoke_session(%Session{} = session, revoked_at, reason) do
+    session
+    |> Session.changeset(%{revoked_at: revoked_at, revoked_reason: reason})
+    |> Repo.update()
+    |> case do
+      {:ok, _session} -> :ok
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
 
   def verify_access_token(access_token, opts \\ []) do
     now = now(opts)
@@ -102,6 +126,18 @@ defmodule MyFoodBack.Auth do
       {:error, :access_token_expired} -> error(:access_token_expired)
       false -> error(:access_token_expired)
       _ -> error(:unauthenticated)
+    end
+  end
+
+  def current_user_snapshot(%Session{user_id: user_id}, opts \\ []) do
+    now = now(opts)
+
+    with %User{} = user <- Repo.get(User, user_id),
+         {:ok, %{account: account, membership: membership}} <- Accounts.get_current_account(user) do
+      {:ok, current_snapshot(user, account, membership, now)}
+    else
+      nil -> error(:unauthenticated)
+      {:error, :not_found} -> error(:account_not_found)
     end
   end
 

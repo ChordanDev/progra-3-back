@@ -23,6 +23,8 @@ defmodule MyFoodBack.Auth.Tokens do
     |> Base.encode16(case: :lower)
   end
 
+  def hash_identifier(_value), do: nil
+
   def sign_access_token(session, now) do
     payload = %{
       "session_id" => session.id,
