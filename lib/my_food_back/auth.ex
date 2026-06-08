@@ -72,6 +72,9 @@ defmodule MyFoodBack.Auth do
       nil ->
         error(:refresh_token_invalid)
 
+      %Session{revoked_at: revoked_at, revoked_reason: "rotated"} when not is_nil(revoked_at) ->
+        error(:refresh_token_replayed)
+
       %Session{revoked_at: revoked_at} when not is_nil(revoked_at) ->
         :ok
 
@@ -350,7 +353,7 @@ defmodule MyFoodBack.Auth do
         refresh_token_hash: Tokens.hash_refresh_token(refresh_token),
         expires_at: DateTime.add(now, @refresh_token_ttl_seconds, :second),
         last_used_at: now,
-        user_agent: Keyword.get(opts, :user_agent),
+        user_agent: normalize_user_agent(Keyword.get(opts, :user_agent)),
         ip_hash: Tokens.hash_identifier(Keyword.get(opts, :ip))
       })
       |> repo.insert!()
@@ -374,7 +377,8 @@ defmodule MyFoodBack.Auth do
           refresh_token_hash: Tokens.hash_refresh_token(refresh_token),
           expires_at: DateTime.add(now, @refresh_token_ttl_seconds, :second),
           last_used_at: now,
-          user_agent: Keyword.get(opts, :user_agent, old_session.user_agent),
+          user_agent:
+            normalize_user_agent(Keyword.get(opts, :user_agent, old_session.user_agent)),
           ip_hash: Tokens.hash_identifier(Keyword.get(opts, :ip)) || old_session.ip_hash
         })
       end)
@@ -421,6 +425,14 @@ defmodule MyFoodBack.Auth do
 
   defp ensure_old_revoked(_repo, %{revoke_old: {1, _rows}}), do: {:ok, :revoked}
   defp ensure_old_revoked(_repo, _changes), do: error(:refresh_token_replayed)
+
+  defp normalize_user_agent(nil), do: nil
+
+  defp normalize_user_agent(user_agent) when is_binary(user_agent) do
+    String.slice(user_agent, 0, 255)
+  end
+
+  defp normalize_user_agent(_user_agent), do: nil
 
   defp auth_response(user, account, membership, session, refresh_token, now) do
     %{

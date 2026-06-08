@@ -99,7 +99,7 @@ defmodule MyFoodBack.Auth.SessionTest do
                Auth.refresh_session(refreshed.refresh_token, now: DateTime.add(@now, 7, :minute))
     end
 
-    test "revoked and expired refresh tokens are rejected with stable errors" do
+    test "revoked, rotated, and expired refresh tokens are rejected with stable errors" do
       assert {:ok, %{user: user}} =
                Accounts.create_individual_account(%{email: "reject@example.com"}, now: @now)
 
@@ -109,10 +109,28 @@ defmodule MyFoodBack.Auth.SessionTest do
       assert {:error, %{code: "refresh_token_revoked"}} =
                Auth.refresh_session(auth.refresh_token, now: DateTime.add(@now, 2, :minute))
 
-      expired = login(user.email, "device-b", DateTime.add(@now, 61, :second))
+      rotated = login(user.email, "device-b", DateTime.add(@now, 61, :second))
+
+      assert {:ok, _refreshed} =
+               Auth.refresh_session(rotated.refresh_token, now: DateTime.add(@now, 2, :minute))
+
+      assert {:error, %{code: "refresh_token_replayed"}} =
+               Auth.logout(rotated.refresh_token, now: DateTime.add(@now, 3, :minute))
+
+      expired = login(user.email, "device-c", DateTime.add(@now, 122, :second))
 
       assert {:error, %{code: "refresh_token_expired"}} =
                Auth.refresh_session(expired.refresh_token, now: DateTime.add(@now, 31, :day))
+    end
+
+    test "long user agents do not crash session creation" do
+      assert {:ok, %{user: user}} =
+               Accounts.create_individual_account(%{email: "agent@example.com"}, now: @now)
+
+      auth = login(user.email, "device-a", @now, String.duplicate("A", 1_000))
+
+      assert is_binary(auth.refresh_token)
+      assert Repo.one!(Session).user_agent |> String.length() == 255
     end
 
     test "logout revokes only current session" do
@@ -132,12 +150,15 @@ defmodule MyFoodBack.Auth.SessionTest do
     end
   end
 
-  defp login(email, device_id, now) do
+  defp login(email, device_id, now, user_agent \\ nil) do
     assert {:ok, _} = Auth.request_login_code(%{email: email}, now: now)
     code = delivered_code()
 
     assert {:ok, auth} =
-             Auth.verify_login_code(%{email: email, code: code, device_id: device_id}, now: now)
+             Auth.verify_login_code(%{email: email, code: code, device_id: device_id},
+               now: now,
+               user_agent: user_agent
+             )
 
     auth
   end
