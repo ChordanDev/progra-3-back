@@ -133,8 +133,22 @@ defmodule MyFoodBackWeb.AuthControllerTest do
       assert {:ok, _token} = Auth.refresh_session(second.refresh_token, now: @now)
     end
 
+    test "logout rejects missing or non-string refresh token without crashing", %{conn: conn} do
+      auth = signup_via_context("missing-token@example.com")
+
+      for params <- [%{}, %{refreshToken: nil}, %{refreshToken: 123}] do
+        conn =
+          conn
+          |> recycle()
+          |> put_req_header("authorization", "Bearer #{auth.access_token}")
+          |> post(~p"/api/auth/logout", params)
+
+        assert %{"error" => %{"code" => "refresh_token_invalid"}} = json_response(conn, 401)
+      end
+    end
+
     test "verification errors map to stable envelopes", %{conn: conn} do
-      assert {:ok, _} = Auth.request_signup_code(%{email: "invalid@example.com"}, now: @now)
+      assert {:ok, _} = Auth.request_signup_code(%{email: "invalid@example.com"}, now: now())
 
       conn =
         post(conn, ~p"/api/auth/signup/verify-code", %{
@@ -199,23 +213,20 @@ defmodule MyFoodBackWeb.AuthControllerTest do
   end
 
   defp signup_via_context(email) do
-    assert {:ok, _} = Auth.request_signup_code(%{email: email}, now: @now)
+    now = now()
+    assert {:ok, _} = Auth.request_signup_code(%{email: email}, now: now)
     code = delivered_code()
-    assert {:ok, auth} = Auth.verify_signup_code(%{email: email, code: code}, now: @now)
+    assert {:ok, auth} = Auth.verify_signup_code(%{email: email, code: code}, now: now)
     auth
   end
 
   defp login_via_context(email) do
-    assert {:ok, _} =
-             Auth.request_login_code(%{email: email}, now: DateTime.add(@now, 61, :second))
-
+    now = now() |> DateTime.add(61, :second)
+    assert {:ok, _} = Auth.request_login_code(%{email: email}, now: now)
     code = delivered_code()
-
-    assert {:ok, auth} =
-             Auth.verify_login_code(%{email: email, code: code},
-               now: DateTime.add(@now, 61, :second)
-             )
-
+    assert {:ok, auth} = Auth.verify_login_code(%{email: email, code: code}, now: now)
     auth
   end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end

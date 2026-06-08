@@ -5,8 +5,6 @@ defmodule MyFoodBackWeb.MeControllerTest do
   alias MyFoodBack.Auth
   alias MyFoodBack.Repo
 
-  @now ~U[2026-06-08 12:00:00Z]
-
   describe "GET /api/me" do
     test "rejects unauthenticated requests", %{conn: conn} do
       conn = get(conn, ~p"/api/me")
@@ -15,7 +13,7 @@ defmodule MyFoodBackWeb.MeControllerTest do
     end
 
     test "returns current user snapshot without full preferences", %{conn: conn} do
-      auth = signup("active@example.com", @now)
+      auth = signup("active@example.com", now())
 
       conn =
         conn
@@ -42,7 +40,7 @@ defmodule MyFoodBackWeb.MeControllerTest do
     end
 
     test "returns trial_expired access lock", %{conn: conn} do
-      auth = signup("locked@example.com", @now)
+      auth = signup("locked@example.com", now())
 
       Account
       |> Repo.one!()
@@ -59,7 +57,7 @@ defmodule MyFoodBackWeb.MeControllerTest do
     end
 
     test "active subscription overrides expired trial lock", %{conn: conn} do
-      auth = signup("paid@example.com", @now)
+      auth = signup("paid@example.com", now())
 
       Account
       |> Repo.one!()
@@ -86,4 +84,6 @@ defmodule MyFoodBackWeb.MeControllerTest do
     assert {:ok, auth} = Auth.verify_signup_code(%{email: email, code: code}, now: now)
     auth
   end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 end
