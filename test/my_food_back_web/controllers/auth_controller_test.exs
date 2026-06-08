@@ -96,6 +96,25 @@ defmodule MyFoodBackWeb.AuthControllerTest do
       assert me["user"]["email"] == "user@example.com"
     end
 
+    test "verify-code ignores non-string deviceId without crashing", %{conn: conn} do
+      conn = post(conn, ~p"/api/auth/signup/request-code", %{email: "bad-device@example.com"})
+      assert json_response(conn, 200)["status"] == "code_sent"
+      code = delivered_code()
+
+      conn =
+        post(build_conn(), ~p"/api/auth/signup/verify-code", %{
+          email: "bad-device@example.com",
+          code: code,
+          deviceId: 123
+        })
+
+      assert %{"accessToken" => access_token, "refreshToken" => refresh_token} =
+               json_response(conn, 200)
+
+      assert is_binary(access_token)
+      assert is_binary(refresh_token)
+    end
+
     test "refresh rotates tokens and logout requires bearer auth", %{conn: conn} do
       auth = signup_via_context("refresh@example.com")
 
