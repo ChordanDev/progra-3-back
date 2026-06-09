@@ -7,6 +7,7 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
   alias MyFoodBack.Accounts.User
   alias MyFoodBack.Auth
   alias MyFoodBack.Auth.EmailCode
+  alias MyFoodBack.RateLimits.Event
 
   @now ~U[2026-06-07 12:00:00Z]
 
@@ -40,7 +41,9 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
 
       assert_email_sent(fn email ->
         assert email.to == [{"", "new@example.com"}]
-        assert email.subject =~ "código"
+        assert email.from == {"Meal Planner", "no-reply@example.com"}
+        assert email.subject =~ "code"
+        assert email.text_body =~ "Your access code is"
         assert email.text_body =~ ~r/\b\d{6}\b/
       end)
     end
@@ -169,6 +172,73 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
                )
     end
 
+    test "records verification attempts for rolling rate limits" do
+      assert {:ok, _response} =
+               Auth.request_signup_code(%{email: "record-verify@example.com"}, now: @now)
+
+      assert {:error, %{code: "code_invalid"}} =
+               Auth.verify_signup_code(%{email: "record-verify@example.com", code: "000000"},
+                 now: @now,
+                 ip: "127.0.0.10",
+                 device_id: "device-record"
+               )
+
+      assert Repo.aggregate(
+               from(event in Event,
+                 where: event.action == "verify_code" and event.scope == "email"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(event in Event,
+                 where: event.action == "verify_code" and event.scope == "ip"
+               ),
+               :count
+             ) == 1
+
+      assert Repo.aggregate(
+               from(event in Event,
+                 where: event.action == "verify_code" and event.scope == "device"
+               ),
+               :count
+             ) == 1
+    end
+
+    test "returns rate_limited when email exceeds verification rolling limit" do
+      email = "verify-limit@example.com"
+
+      assert {:ok, _response} = Auth.request_signup_code(%{email: email}, now: @now)
+      code = delivered_code()
+
+      seed_verify_limit_events(:email, "email:signup:#{email}", 10)
+
+      assert {:error, %{code: "rate_limited"}} =
+               Auth.verify_signup_code(%{email: email, code: code}, now: @now)
+
+      email_code = Repo.one!(EmailCode)
+      assert email_code.consumed_at == nil
+      assert email_code.attempt_count == 0
+    end
+
+    test "returns rate_limited when device exceeds verification rolling limit" do
+      email = "verify-device-limit@example.com"
+
+      assert {:ok, _response} = Auth.request_signup_code(%{email: email}, now: @now)
+      code = delivered_code()
+
+      seed_verify_limit_events(:device, "device-limit", 20)
+
+      assert {:error, %{code: "rate_limited"}} =
+               Auth.verify_signup_code(%{email: email, code: code, device_id: "device-limit"},
+                 now: @now
+               )
+
+      email_code = Repo.one!(EmailCode)
+      assert email_code.consumed_at == nil
+      assert email_code.attempt_count == 0
+    end
+
     test "new code invalidates the previous code for the same email and flow" do
       assert {:ok, _response} =
                Auth.request_signup_code(%{email: "replace@example.com"}, now: @now)
@@ -198,5 +268,20 @@ defmodule MyFoodBack.Auth.EmailCodeTest do
     assert_received {:email, email}
     [code] = Regex.run(~r/\b\d{6}\b/, email.text_body)
     code
+  end
+
+  defp seed_verify_limit_events(scope, raw_key, count) do
+    for offset <- 1..count do
+      occurred_at = DateTime.add(@now, -offset, :second)
+
+      %Event{}
+      |> Event.changeset(%{
+        key_hash: MyFoodBack.RateLimits.hash_value(raw_key),
+        scope: Atom.to_string(scope),
+        action: "verify_code",
+        occurred_at: occurred_at
+      })
+      |> Repo.insert!()
+    end
   end
 end

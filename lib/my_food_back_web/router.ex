@@ -23,4 +23,8 @@ defmodule MyFoodBackWeb.Router do
     post("/auth/logout", AuthController, :logout)
     get("/me", MeController, :show)
   end
+
+  if Application.compile_env(:my_food_back, :dev_routes) do
+    forward("/dev/mailbox", Plug.Swoosh.MailboxPreview)
+  end
 end

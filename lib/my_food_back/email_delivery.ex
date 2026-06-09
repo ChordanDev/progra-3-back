@@ -8,9 +8,9 @@ defmodule MyFoodBack.EmailDelivery do
 
     new()
     |> to(email)
-    |> from({"Meal Planner", "no-reply@example.com"})
+    |> from(from_address())
     |> subject(subject)
-    |> text_body("Tu código de acceso es #{code}. Expira en 10 minutos.")
+    |> text_body("Your access code is #{code}. It expires in 10 minutes.")
     |> Mailer.deliver()
     |> case do
       {:ok, _metadata} -> :ok
@@ -18,6 +18,12 @@ defmodule MyFoodBack.EmailDelivery do
     end
   end
 
-  defp subject_for(:signup), do: "Tu código para crear cuenta"
-  defp subject_for(:login), do: "Tu código para iniciar sesión"
+  defp subject_for(:signup), do: "Your account creation code"
+  defp subject_for(:login), do: "Your sign-in code"
+
+  defp from_address do
+    config = Application.fetch_env!(:my_food_back, :email_delivery)
+
+    {Keyword.fetch!(config, :from_name), Keyword.fetch!(config, :from_address)}
+  end
 end
