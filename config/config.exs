@@ -24,6 +24,10 @@ config :my_food_back, MyFoodBackWeb.Endpoint,
 # Configure the mailer
 config :my_food_back, MyFoodBack.Mailer, adapter: Swoosh.Adapters.Local
 
+config :my_food_back, :email_delivery,
+  from_name: "Meal Planner",
+  from_address: "no-reply@example.com"
+
 # Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
