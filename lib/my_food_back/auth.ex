@@ -189,14 +189,29 @@ defmodule MyFoodBack.Auth do
     email = normalize_email(attrs)
     code = Map.get(attrs, :code) || Map.get(attrs, "code")
     now = now(opts)
+    opts = verify_rate_limit_opts(attrs, opts, now)
 
     with :ok <- validate_email(email),
          :ok <- validate_code_format(code),
+         :ok <- map_rate_limit(RateLimits.check_verify_code(email, Atom.to_string(flow), opts)),
+         :ok <-
+           map_rate_limit_record(RateLimits.record_verify_code(email, Atom.to_string(flow), opts)),
          {:ok, email_code} <- latest_active_code(email, flow),
          :ok <- verify_loaded_code(email_code, flow, email, code, now) do
       complete_verified_code(flow, email_code, attrs, opts, now)
     end
   end
+
+  defp verify_rate_limit_opts(attrs, opts, now) do
+    device_id = normalize_identifier(Map.get(attrs, :device_id) || Map.get(attrs, "device_id"))
+
+    opts
+    |> Keyword.put(:now, now)
+    |> Keyword.put_new(:device_id, device_id)
+  end
+
+  defp normalize_identifier(value) when is_binary(value), do: value
+  defp normalize_identifier(_value), do: nil
 
   defp verify_loaded_code(%EmailCode{attempt_count: attempts}, _flow, _email, _code, _now)
        when attempts >= @max_attempts do

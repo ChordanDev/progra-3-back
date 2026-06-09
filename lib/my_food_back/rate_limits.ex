@@ -10,6 +10,12 @@ defmodule MyFoodBack.RateLimits do
   @request_ip_window_minutes 60
   @request_device_limit 10
   @request_device_window_minutes 60
+  @verify_email_limit 10
+  @verify_email_window_minutes 15
+  @verify_ip_limit 30
+  @verify_ip_window_minutes 60
+  @verify_device_limit 20
+  @verify_device_window_minutes 60
 
   def check_request_code(email, flow, opts) do
     now = Keyword.fetch!(opts, :now)
@@ -57,6 +63,69 @@ defmodule MyFoodBack.RateLimits do
         event_changeset(:email, request_key("email", flow, email), "request_code", now),
         optional_event_changeset(:ip, ip, "request_code", now),
         optional_event_changeset(:device, device_id, "request_code", now)
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    Repo.transaction(fn ->
+      Enum.each(events, fn changeset ->
+        case Repo.insert(changeset) do
+          {:ok, _event} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end)
+    end)
+    |> case do
+      {:ok, _events} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def check_verify_code(email, flow, opts) do
+    now = Keyword.fetch!(opts, :now)
+    ip = Keyword.get(opts, :ip)
+    device_id = Keyword.get(opts, :device_id)
+
+    with :ok <-
+           check_limit(
+             :email,
+             request_key("email", flow, email),
+             "verify_code",
+             @verify_email_limit,
+             @verify_email_window_minutes,
+             now
+           ),
+         :ok <-
+           check_optional_limit(
+             :ip,
+             ip,
+             "verify_code",
+             @verify_ip_limit,
+             @verify_ip_window_minutes,
+             now
+           ),
+         :ok <-
+           check_optional_limit(
+             :device,
+             device_id,
+             "verify_code",
+             @verify_device_limit,
+             @verify_device_window_minutes,
+             now
+           ) do
+      :ok
+    end
+  end
+
+  def record_verify_code(email, flow, opts) do
+    now = Keyword.fetch!(opts, :now)
+    ip = Keyword.get(opts, :ip)
+    device_id = Keyword.get(opts, :device_id)
+
+    events =
+      [
+        event_changeset(:email, request_key("email", flow, email), "verify_code", now),
+        optional_event_changeset(:ip, ip, "verify_code", now),
+        optional_event_changeset(:device, device_id, "verify_code", now)
       ]
       |> Enum.reject(&is_nil/1)
 

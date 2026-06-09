@@ -1,5 +1,7 @@
 import Config
 
+config :my_food_back, dev_routes: true
+
 # Configure your database
 config :my_food_back, MyFoodBack.Repo,
   username: System.get_env("POSTGRES_USER") || System.get_env("USER"),
