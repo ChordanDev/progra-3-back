@@ -23,6 +23,60 @@ end
 config :my_food_back, MyFoodBackWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+smtp_relay = System.get_env("SMTP_RELAY")
+from_address = System.get_env("SMTP_FROM_ADDRESS")
+from_name = System.get_env("SMTP_FROM_NAME") || "Meal Planner"
+
+if smtp_relay || config_env() == :prod do
+  smtp_username = System.get_env("SMTP_USERNAME")
+  smtp_password = System.get_env("SMTP_PASSWORD")
+
+  missing_smtp_vars =
+    [
+      {"SMTP_RELAY", smtp_relay},
+      {"SMTP_USERNAME", smtp_username},
+      {"SMTP_PASSWORD", smtp_password},
+      {"SMTP_FROM_ADDRESS", from_address}
+    ]
+    |> Enum.filter(fn {_name, value} -> is_nil(value) or value == "" end)
+    |> Enum.map_join(", ", &elem(&1, 0))
+
+  if missing_smtp_vars != "" do
+    raise "missing SMTP environment variable(s): #{missing_smtp_vars}"
+  end
+
+  smtp_tls =
+    case System.get_env("SMTP_TLS", "always") do
+      "always" ->
+        :always
+
+      "if_available" ->
+        :if_available
+
+      "never" ->
+        :never
+
+      other ->
+        raise "invalid SMTP_TLS value #{inspect(other)}; expected always, if_available, or never"
+    end
+
+  config :my_food_back, MyFoodBack.Mailer,
+    adapter: Swoosh.Adapters.SMTP,
+    relay: smtp_relay,
+    username: smtp_username,
+    password: smtp_password,
+    port: String.to_integer(System.get_env("SMTP_PORT", "587")),
+    ssl: System.get_env("SMTP_SSL") in ~w(true 1),
+    tls: smtp_tls,
+    auth: :always,
+    retries: 2,
+    no_mx_lookups: true
+
+  config :my_food_back, :email_delivery,
+    from_name: from_name,
+    from_address: from_address
+end
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
