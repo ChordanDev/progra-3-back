@@ -139,6 +139,42 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
       assert %{"error" => %{"code" => "onboarding_invalid"}} = json_response(conn, 422)
     end
 
+    test "rejects whitespace-only displayName with onboarding_invalid", %{conn: conn} do
+      auth = signup("blank-display-name@example.com")
+      payload = put_in(@valid_payload, ["profile", "displayName"], "   ")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> post(~p"/api/onboarding/complete", payload)
+
+      assert %{"error" => %{"code" => "onboarding_invalid"}} = json_response(conn, 422)
+    end
+
+    test "returns onboarding_already_complete for invalid retry after completion", %{conn: conn} do
+      auth = signup("invalid-retry-onboard@example.com")
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> post(~p"/api/onboarding/complete", @valid_payload)
+
+      assert %{"user" => %{"displayName" => "Lucca"}} = json_response(conn, 200)
+
+      invalid_retry_payload =
+        @valid_payload
+        |> put_in(["profile", "displayName"], "   ")
+        |> put_in(["preferences", "diet"], "made-up-diet")
+        |> update_in(["slotCookingTimes"], &Map.delete(&1, "dinner"))
+
+      conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> post(~p"/api/onboarding/complete", invalid_retry_payload)
+
+      assert %{"error" => %{"code" => "onboarding_already_complete"}} = json_response(conn, 409)
+    end
+
     test "ignores malicious userId/user_id in nested preferences and slot data", %{conn: conn} do
       me = signup("malicious-onboard-me@example.com")
       other = signup("malicious-onboard-other@example.com")

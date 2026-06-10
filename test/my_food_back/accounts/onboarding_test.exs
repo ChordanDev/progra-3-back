@@ -1,5 +1,5 @@
 defmodule MyFoodBack.Accounts.OnboardingTest do
-  use MyFoodBack.DataCase, async: true
+  use MyFoodBack.DataCase, async: false
 
   import Ecto.Query
 
@@ -264,6 +264,46 @@ defmodule MyFoodBack.Accounts.OnboardingTest do
                  now: now
                )
     end
+
+    test "already complete wins even when retry payload would otherwise be invalid", %{user: user} do
+      now = ~U[2026-06-08 12:00:00Z]
+
+      assert {:ok, _} =
+               Accounts.complete_onboarding(
+                 user,
+                 %{
+                   "profile" => @valid_profile,
+                   "preferences" => @valid_preferences,
+                   "slotCookingTimes" => @valid_slots
+                 },
+                 now: now
+               )
+
+      invalid_retry_payload = %{
+        "profile" => Map.put(@valid_profile, "displayName", "   "),
+        "preferences" => Map.put(@valid_preferences, "diet", "made-up-diet"),
+        "slotCookingTimes" => Map.delete(@valid_slots, "dinner")
+      }
+
+      assert {:error, %{code: "onboarding_already_complete"}} =
+               Accounts.complete_onboarding(user, invalid_retry_payload,
+                 now: DateTime.add(now, 1, :second)
+               )
+    end
+
+    test "rejects whitespace-only display name without stamping completion", %{user: user} do
+      payload = %{
+        "profile" => Map.put(@valid_profile, "displayName", "   "),
+        "preferences" => @valid_preferences,
+        "slotCookingTimes" => @valid_slots
+      }
+
+      assert {:error, %{code: "onboarding_invalid"}} =
+               Accounts.complete_onboarding(user, payload, now: ~U[2026-06-08 12:00:00Z])
+
+      reloaded = Repo.get!(User, user.id)
+      assert is_nil(reloaded.onboarding_completed_at)
+    end
   end
 
   describe "user preferences read/update" do
@@ -360,6 +400,38 @@ defmodule MyFoodBack.Accounts.OnboardingTest do
 
       assert prefs.user_id == user.id
       assert Repo.get_by(UserPreferences, user_id: other.id) == nil
+    end
+
+    test "update_user_preferences/2 is safe for concurrent first saves", %{user: user} do
+      first_attrs = %{
+        "diet" => "omnivore",
+        "hardRestrictions" => [],
+        "softPreferences" => ["mushrooms"]
+      }
+
+      second_attrs = %{
+        "diet" => "vegetarian",
+        "hardRestrictions" => ["gluten"],
+        "softPreferences" => ["beans"]
+      }
+
+      tasks =
+        for attrs <- [first_attrs, second_attrs] do
+          Task.async(fn -> Accounts.update_user_preferences(user, attrs) end)
+        end
+
+      results = Enum.map(tasks, &Task.await(&1, 5_000))
+
+      assert Enum.all?(
+               results,
+               &match?({:ok, %UserPreferences{user_id: user_id}} when user_id == user.id, &1)
+             )
+
+      assert Repo.aggregate(UserPreferences, :count) == 1
+
+      assert {:ok, final_preferences} = Accounts.get_user_preferences(user)
+      assert final_preferences.user_id == user.id
+      assert final_preferences.diet in ["omnivore", "vegetarian"]
     end
   end
 

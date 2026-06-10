@@ -22,7 +22,7 @@ defmodule MyFoodBack.Accounts.User do
 
   def changeset(user, attrs) do
     user
-    |> cast(attrs, [:email, :display_name, :onboarding_completed_at])
+    |> cast(attrs, [:email, :display_name])
     |> update_change(:email, &MyFoodBack.Accounts.normalize_email/1)
     |> validate_required([:email])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+\.[^\s]+$/)
@@ -32,6 +32,7 @@ defmodule MyFoodBack.Accounts.User do
   def onboarding_profile_changeset(user, attrs) do
     user
     |> cast(attrs, [:display_name, :household_size, :cooking_skill])
+    |> update_change(:display_name, &String.trim/1)
     |> validate_required([:display_name, :household_size, :cooking_skill])
     |> validate_length(:display_name, min: 1, max: 60)
     |> validate_number(:household_size, greater_than_or_equal_to: 1, less_than_or_equal_to: 20)

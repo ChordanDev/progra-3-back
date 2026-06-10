@@ -28,6 +28,30 @@ defmodule MyFoodBack.Accounts.UserTest do
       assert %{display_name: ["can't be blank"]} = errors_on(changeset)
     end
 
+    test "rejects whitespace-only display_name" do
+      changeset =
+        User.onboarding_profile_changeset(%User{}, %{
+          display_name: "   ",
+          household_size: 1,
+          cooking_skill: "beginner"
+        })
+
+      refute changeset.valid?
+      assert %{display_name: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "trims display_name before storing it" do
+      changeset =
+        User.onboarding_profile_changeset(%User{}, %{
+          display_name: "  Lucca  ",
+          household_size: 1,
+          cooking_skill: "beginner"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :display_name) == "Lucca"
+    end
+
     test "rejects display_name longer than 60 characters" do
       changeset =
         User.onboarding_profile_changeset(%User{}, %{
@@ -243,6 +267,19 @@ defmodule MyFoodBack.Accounts.UserTest do
   end
 
   describe "schema persistence (migration contract)" do
+    test "generic user changeset does not cast onboarding_completed_at" do
+      now = ~U[2026-06-08 12:00:00Z]
+
+      changeset =
+        User.changeset(%User{}, %{
+          email: "protected-completion@example.com",
+          onboarding_completed_at: now
+        })
+
+      assert changeset.valid?
+      refute Ecto.Changeset.get_change(changeset, :onboarding_completed_at)
+    end
+
     test "users has household_size, cooking_skill, and onboarding_completed_at columns" do
       now = ~U[2026-06-08 12:00:00Z]
 

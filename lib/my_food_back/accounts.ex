@@ -270,24 +270,16 @@ defmodule MyFoodBack.Accounts do
   end
 
   def update_user_preferences(%User{id: user_id}, attrs) do
-    case Repo.get_by(UserPreferences, user_id: user_id) do
-      nil ->
-        %UserPreferences{user_id: user_id}
-        |> UserPreferences.changeset(whitelisted_attrs(attrs, @preferences_keys))
-        |> Repo.insert()
-        |> case do
-          {:ok, prefs} -> {:ok, prefs}
-          {:error, changeset} -> {:error, %{code: "preferences_invalid", changeset: changeset}}
-        end
-
-      %UserPreferences{} = existing ->
-        existing
-        |> UserPreferences.changeset(whitelisted_attrs(attrs, @preferences_keys))
-        |> Repo.update()
-        |> case do
-          {:ok, prefs} -> {:ok, prefs}
-          {:error, changeset} -> {:error, %{code: "preferences_invalid", changeset: changeset}}
-        end
+    %UserPreferences{user_id: user_id}
+    |> UserPreferences.changeset(whitelisted_attrs(attrs, @preferences_keys))
+    |> Repo.insert(
+      on_conflict: {:replace, [:diet, :hard_restrictions, :soft_preferences, :updated_at]},
+      conflict_target: [:user_id],
+      returning: true
+    )
+    |> case do
+      {:ok, prefs} -> {:ok, prefs}
+      {:error, changeset} -> {:error, %{code: "preferences_invalid", changeset: changeset}}
     end
   end
 
