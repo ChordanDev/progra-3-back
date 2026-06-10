@@ -161,6 +161,51 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
       assert Repo.get_by(UserPreferences, user_id: other_user_id) == nil
       assert Repo.all(from row in UserSlotCookingTime, where: row.user_id == ^other_user_id) == []
     end
+
+    test "succeeds after preferences and slot cooking times were saved before completion", %{
+      conn: conn
+    } do
+      auth = signup("pre-saved-onboard@example.com")
+
+      preferences_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> put(~p"/api/me/preferences", %{
+          "diet" => "vegetarian",
+          "hardRestrictions" => ["gluten"],
+          "softPreferences" => ["beans"]
+        })
+
+      assert %{"diet" => "vegetarian"} = json_response(preferences_conn, 200)
+
+      slots_conn =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> put(~p"/api/me/slot-cooking-times", %{
+          "breakfast" => %{"cookingTimeMinutes" => 5, "hungerLevel" => "light"},
+          "lunch" => %{"cookingTimeMinutes" => 15, "hungerLevel" => "normal"},
+          "dinner" => %{"cookingTimeMinutes" => 25, "hungerLevel" => "strong"}
+        })
+
+      assert %{"dinner" => %{"cookingTimeMinutes" => 25}} = json_response(slots_conn, 200)
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> post(~p"/api/onboarding/complete", @valid_payload)
+
+      assert %{
+               "preferences" => %{"diet" => "omnivore"},
+               "slotCookingTimes" => %{
+                 "breakfast" => %{"cookingTimeMinutes" => 0, "hungerLevel" => "light"},
+                 "lunch" => %{"cookingTimeMinutes" => 30, "hungerLevel" => "normal"},
+                 "dinner" => %{"cookingTimeMinutes" => 45, "hungerLevel" => "strong"}
+               }
+             } = json_response(conn, 200)
+
+      assert Repo.aggregate(UserPreferences, :count) == 1
+      assert Repo.aggregate(UserSlotCookingTime, :count) == 3
+    end
   end
 
   defp signup(email) do

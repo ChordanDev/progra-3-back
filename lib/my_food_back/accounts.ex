@@ -109,121 +109,130 @@ defmodule MyFoodBack.Accounts do
   end
 
   def complete_onboarding(%User{id: user_id}, attrs, opts \\ []) do
-    fresh = Repo.get!(User, user_id)
+    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
 
-    if fresh.onboarding_completed_at do
-      error(:onboarding_already_complete)
-    else
-      now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
+    multi =
+      Multi.new()
+      |> Multi.run(:user, fn repo, _changes ->
+        user = lock_user_for_onboarding!(repo, user_id)
 
-      with {:ok, profile_changeset} <- build_profile_changeset(fresh, attrs),
-           {:ok, preferences_changeset} <- build_preferences_changeset(fresh, attrs),
-           {:ok, slot_changesets} <- build_slot_changesets(fresh, attrs) do
-        multi =
-          Multi.new()
-          |> Multi.update(:user, profile_changeset)
-          |> Multi.insert(:preferences, preferences_changeset)
-          |> Multi.merge(fn _ -> insert_slots_multi(slot_changesets) end)
-          |> Multi.update(:complete_user, fn %{user: user} ->
-            User.completion_changeset(user, %{onboarding_completed_at: now})
-          end)
-
-        case Repo.transaction(multi) do
-          {:ok,
-           %{
-             user: _profile_user,
-             complete_user: user,
-             preferences: preferences,
-             slot_cooking_times: rows
-           }} ->
-            {:ok,
-             %{
-               user: user,
-               preferences: preferences,
-               slot_cooking_times: rows
-             }}
-
-          {:error, _step, %{errors: errors} = changeset, _changes} ->
-            onboarding_invalid(error: errors, changeset: changeset)
-
-          {:error, _step, %Ecto.Changeset{} = changeset, _changes} ->
-            onboarding_invalid(error: changeset_errors(changeset), changeset: changeset)
-
-          {:error, _step, reason, _changes} when is_atom(reason) ->
-            {:error, %{code: Atom.to_string(reason)}}
-
-          {:error, _step, reason, _changes} ->
-            {:error, %{code: "onboarding_invalid", reason: reason}}
+        if user.onboarding_completed_at do
+          {:error, :onboarding_already_complete}
+        else
+          {:ok, user}
         end
-      end
+      end)
+      |> Multi.update(:profile_user, fn %{user: user} ->
+        User.onboarding_profile_changeset(user, onboarding_profile_attrs(attrs))
+      end)
+      |> Multi.insert(
+        :preferences,
+        fn %{user: user} ->
+          onboarding_preferences_changeset(user, attrs)
+        end,
+        on_conflict: {:replace, [:diet, :hard_restrictions, :soft_preferences, :updated_at]},
+        conflict_target: [:user_id],
+        returning: true
+      )
+      |> Multi.merge(fn %{user: user} ->
+        user
+        |> onboarding_slot_changesets(attrs)
+        |> upsert_onboarding_slots_multi()
+      end)
+      |> Multi.update(:complete_user, fn %{profile_user: user} ->
+        User.completion_changeset(user, %{onboarding_completed_at: now})
+      end)
+
+    case Repo.transaction(multi) do
+      {:ok,
+       %{
+         complete_user: user,
+         preferences: preferences,
+         slot_cooking_times: rows
+       }} ->
+        {:ok,
+         %{
+           user: user,
+           preferences: preferences,
+           slot_cooking_times: rows
+         }}
+
+      {:error, _step, %{errors: errors} = changeset, _changes} ->
+        onboarding_invalid(error: errors, changeset: changeset)
+
+      {:error, _step, %Ecto.Changeset{} = changeset, _changes} ->
+        onboarding_invalid(error: changeset_errors(changeset), changeset: changeset)
+
+      {:error, _step, %{code: "onboarding_invalid"} = error, _changes} ->
+        {:error, error}
+
+      {:error, _step, reason, _changes} when is_atom(reason) ->
+        {:error, %{code: Atom.to_string(reason)}}
+
+      {:error, _step, reason, _changes} ->
+        {:error, %{code: "onboarding_invalid", reason: reason}}
     end
   end
 
-  defp build_profile_changeset(user, attrs) do
-    profile = nested_attrs(attrs, ["profile", :profile], %{})
-
-    changeset =
-      user
-      |> User.onboarding_profile_changeset(whitelisted_attrs(profile, @profile_keys))
-
-    if changeset.valid? do
-      {:ok, changeset}
-    else
-      onboarding_invalid(error: changeset_errors(changeset), changeset: changeset)
-    end
+  defp lock_user_for_onboarding!(repo, user_id) do
+    User
+    |> where([user], user.id == ^user_id)
+    |> lock("FOR UPDATE")
+    |> repo.one!()
   end
 
-  defp build_preferences_changeset(user, attrs) do
+  defp onboarding_profile_attrs(attrs) do
+    attrs
+    |> nested_attrs(["profile", :profile], %{})
+    |> whitelisted_attrs(@profile_keys)
+  end
+
+  defp onboarding_preferences_changeset(user, attrs) do
     preferences = nested_attrs(attrs, ["preferences", :preferences], %{})
 
-    changeset =
-      %UserPreferences{user_id: user.id}
-      |> UserPreferences.changeset(whitelisted_attrs(preferences, @preferences_keys))
-
-    if changeset.valid? do
-      {:ok, changeset}
-    else
-      onboarding_invalid(error: changeset_errors(changeset), changeset: changeset)
-    end
+    %UserPreferences{user_id: user.id}
+    |> UserPreferences.changeset(whitelisted_attrs(preferences, @preferences_keys))
   end
 
-  defp build_slot_changesets(user, attrs) do
+  defp onboarding_slot_changesets(user, attrs) do
     slots = nested_attrs(attrs, ["slotCookingTimes", :slot_cooking_times], %{})
 
-    cond do
-      not is_map(slots) or map_size(slots) != 3 ->
-        {:error, %{code: "onboarding_invalid", error: "slot cooking times must include 3 slots"}}
+    if is_map(slots) and map_size(slots) == 3 do
+      for slot <- @supported_slots, into: %{} do
+        value = slot_value(slots, slot)
 
-      true ->
-        slot_changesets =
-          for slot <- @supported_slots, into: %{} do
-            value = slot_value(slots, slot)
+        normalized =
+          value
+          |> whitelisted_attrs(@slot_value_keys)
+          |> Map.put(:meal_slot, slot)
 
-            normalized =
-              value
-              |> whitelisted_attrs(@slot_value_keys)
-              |> Map.put(:meal_slot, slot)
+        changeset =
+          %UserSlotCookingTime{user_id: user.id}
+          |> UserSlotCookingTime.changeset(normalized)
 
-            changeset =
-              %UserSlotCookingTime{user_id: user.id}
-              |> UserSlotCookingTime.changeset(normalized)
-
-            {slot, changeset}
-          end
-
-        if Enum.all?(slot_changesets, fn {_slot, cs} -> cs.valid? end) do
-          {:ok, slot_changesets}
-        else
-          {_slot, bad} = Enum.find(slot_changesets, fn {_slot, cs} -> not cs.valid? end)
-          onboarding_invalid(error: changeset_errors(bad), changeset: bad)
-        end
+        {slot, changeset}
+      end
+    else
+      :invalid_slot_count
     end
   end
 
-  defp insert_slots_multi(changesets) do
+  defp upsert_onboarding_slots_multi(:invalid_slot_count) do
+    Multi.new()
+    |> Multi.error(:slot_cooking_times, %{
+      code: "onboarding_invalid",
+      error: "slot cooking times must include 3 slots"
+    })
+  end
+
+  defp upsert_onboarding_slots_multi(changesets) do
     multi =
       Enum.reduce(changesets, Multi.new(), fn {slot, changeset}, multi ->
-        Multi.insert(multi, {:slot, slot}, changeset)
+        Multi.insert(multi, {:slot, slot}, changeset,
+          on_conflict: {:replace, [:cooking_time_minutes, :hunger_level, :updated_at]},
+          conflict_target: [:user_id, :meal_slot],
+          returning: true
+        )
       end)
 
     Multi.run(multi, :slot_cooking_times, fn _repo, changes ->
@@ -390,6 +399,4 @@ defmodule MyFoodBack.Accounts do
         {:error, %{code: "slot_cooking_times_invalid", reason: reason}}
     end
   end
-
-  defp error(code), do: {:error, %{code: Atom.to_string(code)}}
 end

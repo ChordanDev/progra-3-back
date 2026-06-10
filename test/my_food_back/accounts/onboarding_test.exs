@@ -193,6 +193,48 @@ defmodule MyFoodBack.Accounts.OnboardingTest do
       assert Repo.all(from row in UserSlotCookingTime, where: row.user_id == ^other.id) == []
     end
 
+    test "updates existing preferences and slot rows instead of inserting duplicates", %{
+      user: user
+    } do
+      {:ok, _existing_preferences} =
+        Accounts.update_user_preferences(user, %{
+          "diet" => "vegetarian",
+          "hardRestrictions" => ["gluten"],
+          "softPreferences" => ["beans"]
+        })
+
+      {:ok, _existing_slots} =
+        Accounts.update_slot_cooking_times(user, %{
+          "breakfast" => %{"cookingTimeMinutes" => 5, "hungerLevel" => "light"},
+          "lunch" => %{"cookingTimeMinutes" => 15, "hungerLevel" => "normal"},
+          "dinner" => %{"cookingTimeMinutes" => 25, "hungerLevel" => "strong"}
+        })
+
+      now = ~U[2026-06-08 12:00:00Z]
+
+      assert {:ok, result} =
+               Accounts.complete_onboarding(
+                 user,
+                 %{
+                   "profile" => @valid_profile,
+                   "preferences" => @valid_preferences,
+                   "slotCookingTimes" => @valid_slots
+                 },
+                 now: now
+               )
+
+      assert result.user.onboarding_completed_at == now
+      assert result.preferences.diet == "omnivore"
+      assert result.preferences.hard_restrictions == ["peanut"]
+      assert result.preferences.soft_preferences == ["mushrooms"]
+
+      assert Repo.aggregate(UserPreferences, :count) == 1
+      assert Repo.aggregate(UserSlotCookingTime, :count) == 3
+
+      assert {:ok, slots} = Accounts.get_slot_cooking_times(user)
+      assert slots == @valid_slots
+    end
+
     test "is idempotent on the same submission: already complete wins over second call", %{
       user: user
     } do
