@@ -12,6 +12,22 @@ defmodule MyFoodBackWeb.MeControllerTest do
       assert %{"error" => %{"code" => "unauthenticated"}} = json_response(conn, 401)
     end
 
+    test "locked account can still call /api/me", %{conn: conn} do
+      auth = signup("locked-me@example.com", now())
+
+      Account
+      |> Repo.one!()
+      |> Account.changeset(%{trial_ends_at: ~U[2026-05-11 12:00:00Z]})
+      |> Repo.update!()
+
+      conn =
+        conn
+        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> get(~p"/api/me")
+
+      assert %{"account" => %{"access" => %{"canUseApp" => false}}} = json_response(conn, 200)
+    end
+
     test "returns current user snapshot without full preferences", %{conn: conn} do
       auth = signup("active@example.com", now())
 
