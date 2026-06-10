@@ -22,6 +22,15 @@ defmodule MyFoodBackWeb.Router do
 
     post("/auth/logout", AuthController, :logout)
     get("/me", MeController, :show)
+
+    # Setup endpoints: must remain available while the Account is in Access Lock
+    # so locked Users can complete onboarding. These are NOT piped through
+    # `RequireUnlockedAccount` — protected app data routes still are.
+    post("/onboarding/complete", OnboardingController, :complete)
+    get("/me/preferences", PreferencesController, :show)
+    put("/me/preferences", PreferencesController, :update)
+    get("/me/slot-cooking-times", SlotCookingTimesController, :show)
+    put("/me/slot-cooking-times", SlotCookingTimesController, :update)
   end
 
   if Application.compile_env(:my_food_back, :dev_routes) do
