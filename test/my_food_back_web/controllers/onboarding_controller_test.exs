@@ -3,7 +3,6 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
 
   import Ecto.Query
 
-  alias MyFoodBack.Auth
   alias MyFoodBack.Accounts.{UserPreferences, UserSlotCookingTime}
   alias MyFoodBack.Repo
 
@@ -34,11 +33,11 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
     test "accepts a complete payload from an authenticated user, returns the saved shape", %{
       conn: conn
     } do
-      auth = signup("onboard-controller@example.com")
+      auth = signup_user("onboard-controller@example.com")
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", @valid_payload)
 
       assert %{
@@ -63,13 +62,12 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
     test "locked account can still complete onboarding (setup endpoints are exempt from lock)", %{
       conn: conn
     } do
-      auth = signup("locked-onboard@example.com")
-
-      force_account_lock(auth)
+      auth = signup_user("locked-onboard@example.com")
+      lock_current_account(auth)
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", @valid_payload)
 
       assert %{
@@ -80,25 +78,25 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
     test "rejects a second submission with onboarding_already_complete (idempotency)", %{
       conn: conn
     } do
-      auth = signup("dup-onboard@example.com")
+      auth = signup_user("dup-onboard@example.com")
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", @valid_payload)
 
       assert %{"user" => %{"displayName" => "Lucca"}} = json_response(conn, 200)
 
       conn =
         build_conn()
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", @valid_payload)
 
       assert %{"error" => %{"code" => "onboarding_already_complete"}} = json_response(conn, 409)
     end
 
     test "rejects missing dinner slot with onboarding_invalid", %{conn: conn} do
-      auth = signup("missing-dinner@example.com")
+      auth = signup_user("missing-dinner@example.com")
 
       payload =
         put_in(
@@ -109,54 +107,54 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", payload)
 
       assert %{"error" => %{"code" => "onboarding_invalid"}} = json_response(conn, 422)
     end
 
     test "rejects unknown diet with onboarding_invalid", %{conn: conn} do
-      auth = signup("bad-diet@example.com")
+      auth = signup_user("bad-diet@example.com")
       payload = put_in(@valid_payload, ["preferences", "diet"], "made-up-diet")
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", payload)
 
       assert %{"error" => %{"code" => "onboarding_invalid"}} = json_response(conn, 422)
     end
 
     test "rejects invalid cookingSkill with onboarding_invalid", %{conn: conn} do
-      auth = signup("bad-skill@example.com")
+      auth = signup_user("bad-skill@example.com")
       payload = put_in(@valid_payload, ["profile", "cookingSkill"], "wizard")
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", payload)
 
       assert %{"error" => %{"code" => "onboarding_invalid"}} = json_response(conn, 422)
     end
 
     test "rejects whitespace-only displayName with onboarding_invalid", %{conn: conn} do
-      auth = signup("blank-display-name@example.com")
+      auth = signup_user("blank-display-name@example.com")
       payload = put_in(@valid_payload, ["profile", "displayName"], "   ")
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", payload)
 
       assert %{"error" => %{"code" => "onboarding_invalid"}} = json_response(conn, 422)
     end
 
     test "returns onboarding_already_complete for invalid retry after completion", %{conn: conn} do
-      auth = signup("invalid-retry-onboard@example.com")
+      auth = signup_user("invalid-retry-onboard@example.com")
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", @valid_payload)
 
       assert %{"user" => %{"displayName" => "Lucca"}} = json_response(conn, 200)
@@ -169,16 +167,16 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
 
       conn =
         build_conn()
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", invalid_retry_payload)
 
       assert %{"error" => %{"code" => "onboarding_already_complete"}} = json_response(conn, 409)
     end
 
     test "ignores malicious userId/user_id in nested preferences and slot data", %{conn: conn} do
-      me = signup("malicious-onboard-me@example.com")
-      other = signup("malicious-onboard-other@example.com")
-      other_user_id = user_id_from_token(other.access_token)
+      me = signup_user("malicious-onboard-me@example.com")
+      other = signup_user("malicious-onboard-other@example.com")
+      other_user_id = other.me.user.id
 
       payload =
         @valid_payload
@@ -190,7 +188,7 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{me.access_token}")
+        |> auth_conn(me)
         |> post(~p"/api/onboarding/complete", payload)
 
       assert %{"preferences" => %{"diet" => "omnivore"}} = json_response(conn, 200)
@@ -201,11 +199,11 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
     test "succeeds after preferences and slot cooking times were saved before completion", %{
       conn: conn
     } do
-      auth = signup("pre-saved-onboard@example.com")
+      auth = signup_user("pre-saved-onboard@example.com")
 
       preferences_conn =
         build_conn()
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> put(~p"/api/me/preferences", %{
           "diet" => "vegetarian",
           "hardRestrictions" => ["gluten"],
@@ -216,7 +214,7 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
 
       slots_conn =
         build_conn()
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> put(~p"/api/me/slot-cooking-times", %{
           "breakfast" => %{"cookingTimeMinutes" => 5, "hungerLevel" => "light"},
           "lunch" => %{"cookingTimeMinutes" => 15, "hungerLevel" => "normal"},
@@ -227,7 +225,7 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
 
       conn =
         conn
-        |> put_req_header("authorization", "Bearer #{auth.access_token}")
+        |> auth_conn(auth)
         |> post(~p"/api/onboarding/complete", @valid_payload)
 
       assert %{
@@ -242,40 +240,5 @@ defmodule MyFoodBackWeb.OnboardingControllerTest do
       assert Repo.aggregate(UserPreferences, :count) == 1
       assert Repo.aggregate(UserSlotCookingTime, :count) == 3
     end
-  end
-
-  defp signup(email) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-    assert {:ok, _} = Auth.request_signup_code(%{email: email}, now: now)
-
-    assert_received {:email, email_message}
-    [code] = Regex.run(~r/\b\d{6}\b/, email_message.text_body)
-    assert {:ok, auth} = Auth.verify_signup_code(%{email: email, code: code}, now: now)
-    auth
-  end
-
-  defp force_account_lock(auth) do
-    import Ecto.Query
-
-    user_id = user_id_from_token(auth.access_token)
-
-    m =
-      from(m in MyFoodBack.Accounts.Membership,
-        where: m.user_id == ^user_id and m.status == "active"
-      )
-      |> Repo.one!()
-
-    Repo.update_all(
-      from(a in MyFoodBack.Accounts.Account, where: a.id == ^m.account_id),
-      set: [trial_ends_at: ~U[2020-01-01 00:00:00Z]]
-    )
-  end
-
-  defp user_id_from_token(access_token) do
-    Auth.verify_access_token(access_token,
-      now: DateTime.utc_now() |> DateTime.truncate(:second)
-    )
-    |> elem(1)
-    |> Map.get(:user_id)
   end
 end
