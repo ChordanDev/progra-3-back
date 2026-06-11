@@ -25,7 +25,7 @@ defmodule MyFoodBackWeb.ConnCase do
 
       auth = signup_user("locked@example.com")
       lock_current_account(auth)
-      conn = get(auth_conn(conn, conn, auth), ~p"/api/me/preferences")
+      conn = get(auth_conn(conn, auth), ~p"/api/me/preferences")
   """
 
   use ExUnit.CaseTemplate
