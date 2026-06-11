@@ -2,14 +2,10 @@ defmodule MyFoodBack.Accounts do
   import Ecto.Query
 
   alias Ecto.Multi
-  alias MyFoodBack.Accounts.{Account, Membership, User, UserPreferences, UserSlotCookingTime}
+  alias MyFoodBack.Accounts.{Account, Membership, SlotCookingTimes, User, UserPreferences, UserSlotCookingTime}
   alias MyFoodBack.Repo
 
   @trial_days 10
-  @supported_slots ~w(breakfast lunch dinner)
-  @slot_atom_keys %{"breakfast" => :breakfast, "lunch" => :lunch, "dinner" => :dinner}
-  @slot_defaults %{"breakfast" => 0, "lunch" => 0, "dinner" => 0}
-  @hunger_defaults %{"breakfast" => "normal", "lunch" => "normal", "dinner" => "normal"}
   @profile_keys %{
     "displayName" => :display_name,
     "display_name" => :display_name,
@@ -30,17 +26,6 @@ defmodule MyFoodBack.Accounts do
     "softPreferences" => :soft_preferences,
     "soft_preferences" => :soft_preferences,
     :soft_preferences => :soft_preferences
-  }
-  @slot_value_keys %{
-    "mealSlot" => :meal_slot,
-    "meal_slot" => :meal_slot,
-    :meal_slot => :meal_slot,
-    "cookingTimeMinutes" => :cooking_time_minutes,
-    "cooking_time_minutes" => :cooking_time_minutes,
-    :cooking_time_minutes => :cooking_time_minutes,
-    "hungerLevel" => :hunger_level,
-    "hunger_level" => :hunger_level,
-    :hunger_level => :hunger_level
   }
 
   def normalize_email(email) when is_binary(email) do
@@ -198,12 +183,12 @@ defmodule MyFoodBack.Accounts do
     slots = nested_attrs(attrs, ["slotCookingTimes", :slot_cooking_times], %{})
 
     if is_map(slots) and map_size(slots) == 3 do
-      for slot <- @supported_slots, into: %{} do
-        value = slot_value(slots, slot)
+      for slot <- SlotCookingTimes.supported_slots(), into: %{} do
+        value = SlotCookingTimes.fetch_slot(slots, slot)
 
         normalized =
           value
-          |> whitelisted_attrs(@slot_value_keys)
+          |> whitelisted_attrs(SlotCookingTimes.value_keys())
           |> Map.put(:meal_slot, slot)
 
         changeset =
@@ -237,7 +222,7 @@ defmodule MyFoodBack.Accounts do
 
     Multi.run(multi, :slot_cooking_times, fn _repo, changes ->
       rows =
-        for slot <- @supported_slots do
+        for slot <- SlotCookingTimes.supported_slots() do
           Map.fetch!(changes, {:slot, slot})
         end
 
@@ -294,61 +279,26 @@ defmodule MyFoodBack.Accounts do
 
   defp whitelisted_attrs(_attrs, _allowed_keys), do: %{}
 
-  defp slot_value(slots, slot) do
-    Map.get(slots, slot) || Map.get(slots, Map.fetch!(@slot_atom_keys, slot))
-  end
-
   def get_slot_cooking_times(%User{id: user_id}) do
     query =
       from(row in UserSlotCookingTime, where: row.user_id == ^user_id)
 
     rows = Repo.all(query)
-
-    defaults =
-      for slot <- @supported_slots, into: %{} do
-        {slot,
-         %{
-           "cookingTimeMinutes" => Map.get(@slot_defaults, slot),
-           "hungerLevel" => Map.get(@hunger_defaults, slot)
-         }}
-      end
-
-    merged =
-      for row <- rows, into: defaults do
-        {row.meal_slot,
-         %{"cookingTimeMinutes" => row.cooking_time_minutes, "hungerLevel" => row.hunger_level}}
-      end
-
-    {:ok, merged}
+    {:ok, SlotCookingTimes.merge_with_defaults(rows)}
   end
 
   def update_slot_cooking_times(%User{id: user_id}, attrs) when is_map(attrs) do
-    normalized =
-      for {slot, value} <- attrs, into: %{} do
-        {to_string(slot), value}
-      end
+    normalized = SlotCookingTimes.stringify_keys(attrs)
 
-    cond do
-      map_size(normalized) != 3 ->
-        {:error, %{code: "slot_cooking_times_invalid", reason: "expected 3 slots"}}
-
-      not Enum.all?(@supported_slots, &Map.has_key?(normalized, &1)) ->
-        {:error, %{code: "slot_cooking_times_invalid", reason: "missing required slot"}}
-
-      Enum.any?(normalized, fn {_slot, value} ->
-        not (is_map(value) and Map.has_key?(value, "cookingTimeMinutes") and
-                 Map.has_key?(value, "hungerLevel"))
-      end) ->
-        {:error, %{code: "slot_cooking_times_invalid", reason: "missing required field"}}
-
-      true ->
-        upsert_slot_cooking_times(user_id, normalized)
+    case SlotCookingTimes.validate_payload(normalized) do
+      :ok -> upsert_slot_cooking_times(user_id, normalized)
+      {:error, code, reason} -> {:error, %{code: code, reason: reason}}
     end
   end
 
   defp upsert_slot_cooking_times(user_id, normalized) do
     multi =
-      Enum.reduce(@supported_slots, Multi.new(), fn slot, multi ->
+      Enum.reduce(SlotCookingTimes.supported_slots(), Multi.new(), fn slot, multi ->
         value = Map.fetch!(normalized, slot)
 
         attrs = %{
@@ -369,14 +319,9 @@ defmodule MyFoodBack.Accounts do
     case Repo.transaction(multi) do
       {:ok, changes} ->
         rows =
-          for slot <- @supported_slots, into: %{} do
+          for slot <- SlotCookingTimes.supported_slots(), into: %{} do
             row = Map.fetch!(changes, {:slot, slot})
-
-            {slot,
-             %{
-               "cookingTimeMinutes" => row.cooking_time_minutes,
-               "hungerLevel" => row.hunger_level
-             }}
+            {slot, SlotCookingTimes.canonical_value(row)}
           end
 
         {:ok, rows}
